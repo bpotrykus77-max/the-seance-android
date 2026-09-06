@@ -21,10 +21,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -33,7 +33,7 @@ jobs:
         id: source
         shell: bash
         run: |
-          DIRECT="$(find . -type f -name settings.gradle.kts -printf '%h\n' | grep -v '^./build-source' | head -n 1)"
+          DIRECT="$(find . -type f -name settings.gradle.kts -printf '%h\n' 2>/dev/null | grep -v '^./build-source' | head -n 1 || true)"
           if [ -n "$DIRECT" ]; then
             echo "mode=direct" >> "$GITHUB_OUTPUT"
             echo "root=." >> "$GITHUB_OUTPUT"
