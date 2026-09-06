@@ -1,4 +1,4 @@
-name: Build Spirit Seance APK
+name: Build THE SÉANCE Android v0.18
 
 on:
   workflow_dispatch:
@@ -7,9 +7,17 @@ on:
       - main
       - master
 
+permissions:
+  contents: read
+
+concurrency:
+  group: spirit-seance-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
@@ -21,42 +29,160 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Unpack Spirit Seance project
+      - name: Prepare Android source
+        id: source
+        shell: bash
         run: |
+          DIRECT="$(find . -type f -name settings.gradle.kts -printf '%h\n' | grep -v '^./build-source' | head -n 1)"
+          if [ -n "$DIRECT" ]; then
+            echo "mode=direct" >> "$GITHUB_OUTPUT"
+            echo "root=." >> "$GITHUB_OUTPUT"
+            echo "Using repository Android source directly"
+            exit 0
+          fi
+
+          ZIP="$(find . -maxdepth 1 -type f -name 'spirit-seance-core*.zip' -printf '%f\n' | sort -V | tail -n 1)"
+          if [ -z "$ZIP" ]; then
+            echo "No Android source tree or Spirit Seance ZIP found."
+            exit 1
+          fi
+          unzip -tq "$ZIP"
+          sha256sum "$ZIP"
           rm -rf build-source
           mkdir build-source
-          unzip -q spirit-seance-core.zip -d build-source
-          echo "ZIP contents:"
-          find build-source -maxdepth 4 -type f | sort
+          unzip -q "$ZIP" -d build-source
+          echo "mode=zip" >> "$GITHUB_OUTPUT"
+          echo "root=build-source" >> "$GITHUB_OUTPUT"
+          echo "Using $ZIP"
 
-      - name: Locate Android project
+      - name: Locate and validate Android project
         id: locate
         shell: bash
         run: |
-          PROJECT_DIR="$(find build-source -type f -name settings.gradle.kts -printf '%h\n' | head -n 1)"
+          PROJECT_DIR="$(find '${{ steps.source.outputs.root }}' -type f -name settings.gradle.kts -printf '%h\n' | head -n 1)"
           if [ -z "$PROJECT_DIR" ]; then
             echo "Android project not found."
             exit 1
           fi
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/app/MainActivity.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/SessionDirector.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/SessionSnapshot.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/ReplyProvider.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/BoardGeometry.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/PromptPrivacyPolicy.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/SessionSnapshotCodec.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/Atmosphere.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/BillingContracts.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/RemoteReplyProvider.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/SessionReplyCoordinator.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/SessionInputPolicy.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/PurchaseFlow.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/SessionHealth.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/SessionRecovery.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/PurchaseLedgerPolicy.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/HostAccessGate.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/PurchaseRestorePolicy.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/HostDirectivePolicy.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/ReplyCircuitBreaker.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/CircuitBreakingReplyProvider.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/core/CallbackPolicy.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/app/PersistentSessionStore.kt"
+          test -f "$PROJECT_DIR/app/src/main/kotlin/com/seance/app/SeanceTheme.kt"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
           echo "Android project: $PROJECT_DIR"
+
+      - name: Validate localization privacy and release invariants
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import re, xml.etree.ElementTree as ET
+          from pathlib import Path
+          root=Path("${{ steps.locate.outputs.project_dir }}")/"app/src/main"
+          sets={}
+          for folder in ("values", "values-de", "values-pl"):
+              tree=ET.parse(root/"res"/folder/"strings.xml")
+              sets[folder]={e.attrib["name"] for e in tree.getroot().findall("string")}
+          assert sets["values"] == sets["values-de"] == sets["values-pl"], sets
+          kt=(root/"kotlin/com/seance/app/MainActivity.kt").read_text()
+          refs=set(re.findall(r"R\.string\.([A-Za-z0-9_]+)", kt))
+          assert refs <= sets["values"], refs-sets["values"]
+          assert "state.phase.name" not in kt
+          assert 'InjectFact("place", "ATTIC")' not in kt
+          assert 'SessionReplyCoordinator' in kt
+          assert 'SessionInputPolicy' in kt
+          assert 'ReplyOrchestrator(primary = null)' in kt
+          assert 'onClick = { tier = AppTier.PRO }' not in kt
+          assert 'ProUpsellCard()' in kt
+          assert 'IntensityMeter(' in kt
+          assert 'VeilStatus(' in kt
+          assert 'HostAccessGate()' in kt
+          assert 'R.string.between_worlds' in kt
+          assert 'R.string.spirit_message' in kt
+          assert 'R.string.session_live' in kt
+          assert 'HostDirectivePolicy()' in kt
+          assert 'VeilViolet' in kt
+          assert 'A B C D E F G H I\\nJ K L M N O P Q R\\nS T U V W X Y Z' in kt
+          normal=kt.split("private fun TranscriptPanel",1)[1].split("private fun newDirector",1)[0]
+          assert "item.source" not in normal
+          build=(Path("${{ steps.locate.outputs.project_dir }}")/"app/build.gradle.kts").read_text()
+          assert 'targetSdk = 36' in build and 'compileSdk = 36' in build
+          assert 'versionCode = 18' in build and 'versionName = "0.18.0"' in build
+          manifest=(root/'AndroidManifest.xml').read_text()
+          assert 'android.permission.INTERNET' in manifest
+          assert 'android:usesCleartextTraffic="false"' in manifest
+          assert 'android:allowBackup="false"' in manifest
+          print("Localization/privacy/release validation passed")
+          PY
+
+      - name: Run packaged core self-test
+        shell: bash
+        run: |
+          TEST_JAR="$(find '${{ steps.source.outputs.root }}' -type f -name 'core-v18-selftest.jar' | head -n 1)"
+          if [ -z "$TEST_JAR" ]; then
+            echo "core-v18-selftest.jar not found"
+            exit 1
+          fi
+          java -jar "$TEST_JAR" | tee core-v18-selftest.out
+          grep -q 'ALL CORE V18 SELF-TESTS PASSED' core-v18-selftest.out
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.1.0'
 
-      
+      - name: Run Android lint
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=1 -Dorg.gradle.parallel=false"
+        run: gradle :app:lintDebug --no-daemon --max-workers=1 --stacktrace
 
       - name: Build debug APK
         working-directory: ${{ steps.locate.outputs.project_dir }}
         env:
-          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
-        run: gradle assembleDebug --no-daemon --max-workers=2 --stacktrace
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -Dorg.gradle.workers.max=1 -Dorg.gradle.parallel=false"
+        run: gradle :app:assembleDebug --no-daemon --max-workers=1 --stacktrace
 
-        - name: Upload APK
+      - name: Verify and checksum APK
+        id: apk
+        shell: bash
+        run: |
+          APK="$(find '${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug' -type f -name '*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "APK was not produced."
+            exit 1
+          fi
+          ls -lh "$APK"
+          sha256sum "$APK" | tee spirit-seance-debug.apk.sha256
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: spirit-seance-debug-apk
-          path: ${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug/*.apk
+          name: the-seance-v0.18-debug-apk
+          path: |
+            ${{ steps.apk.outputs.apk }}
+            spirit-seance-debug.apk.sha256
           if-no-files-found: error
+          retention-days: 14
