@@ -41,11 +41,16 @@ jobs:
             exit 0
           fi
 
-          ZIP="$(find . -maxdepth 1 -type f -name 'spirit-seance-core*.zip' -printf '%f\n' | sort -V | tail -n 1)"
+          if [ -f "spirit-seance-core-v18-fixed3.zip" ]; then
+            ZIP="spirit-seance-core-v18-fixed3.zip"
+          else
+            ZIP="$(find . -maxdepth 1 -type f -name 'spirit-seance-core*.zip' -printf '%f\n' | sort -V | tail -n 1)"
+          fi
           if [ -z "$ZIP" ]; then
             echo "No Android source tree or Spirit Seance ZIP found."
             exit 1
           fi
+          echo "Selected source archive: $ZIP"
           unzip -tq "$ZIP"
           sha256sum "$ZIP"
           rm -rf build-source
@@ -126,9 +131,18 @@ jobs:
           assert 'A B C D E F G H I\\nJ K L M N O P Q R\\nS T U V W X Y Z' in kt
           normal=kt.split("private fun TranscriptPanel",1)[1].split("private fun newDirector",1)[0]
           assert "item.source" not in normal
-          build=(Path("${{ steps.locate.outputs.project_dir }}")/"app/build.gradle.kts").read_text()
-          assert 'targetSdk = 36' in build and 'compileSdk = 36' in build
-          assert 'versionCode = 18' in build and 'versionName = "0.18.0"' in build
+          build_path=Path("${{ steps.locate.outputs.project_dir }}")/"app/build.gradle.kts"
+          build=build_path.read_text()
+          compile_match=re.search(r"\bcompileSdk\s*=\s*(\d+)", build)
+          target_match=re.search(r"\btargetSdk\s*=\s*(\d+)", build)
+          version_code_match=re.search(r"\bversionCode\s*=\s*(\d+)", build)
+          version_name_match=re.search(r'\bversionName\s*=\s*"([^"]+)"', build)
+          print(f"Build file: {build_path}")
+          print(f"Detected compileSdk={compile_match.group(1) if compile_match else None}, targetSdk={target_match.group(1) if target_match else None}, versionCode={version_code_match.group(1) if version_code_match else None}, versionName={version_name_match.group(1) if version_name_match else None}")
+          assert compile_match and compile_match.group(1) == "37", build
+          assert target_match and target_match.group(1) == "36", build
+          assert version_code_match and version_code_match.group(1) == "18", build
+          assert version_name_match and version_name_match.group(1) == "0.18.0", build
           manifest=(root/'AndroidManifest.xml').read_text()
           assert 'android.permission.INTERNET' in manifest
           assert 'android:usesCleartextTraffic="false"' in manifest
@@ -150,7 +164,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.3.1'
+          gradle-version: '9.4.1'
 
       - name: Run Android lint
         working-directory: ${{ steps.locate.outputs.project_dir }}
