@@ -41,8 +41,8 @@ jobs:
             exit 0
           fi
 
-          if [ -f "spirit-seance-core-v18-fixed3.zip" ]; then
-            ZIP="spirit-seance-core-v18-fixed3.zip"
+          if [ -f "spirit-seance-core-v18-fixed4.zip" ]; then
+            ZIP="spirit-seance-core-v18-fixed4.zip"
           else
             ZIP="$(find . -maxdepth 1 -type f -name 'spirit-seance-core*.zip' -printf '%f\n' | sort -V | tail -n 1)"
           fi
